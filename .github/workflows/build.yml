@@ -3,7 +3,7 @@
 
 name: Java CI with Gradle
 
-on: [push, pull_request]
+on: [commit]
 
 jobs:
   build:
@@ -25,3 +25,5 @@ jobs:
       run: chmod +x gradlew
     - name: Build with Gradle
       run: ./gradlew build --stacktrace
+    - name: Download all workflow run artifacts
+      uses: actions/download-artifact@v2
