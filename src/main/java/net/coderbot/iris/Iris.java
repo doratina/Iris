@@ -2,7 +2,6 @@ package net.coderbot.iris;
 
 import java.io.IOException;
 import java.nio.file.*;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.zip.ZipException;
 
@@ -38,7 +37,7 @@ public class Iris implements ClientModInitializer {
 	public static final String MODID = "iris";
 	public static final Logger logger = LogManager.getLogger(MODID);
 
-	private static final Path shaderpacksDirectory = FabricLoader.getInstance().getGameDir().resolve("shaderpacks");
+	public static final Path SHADERPACKS_DIRECTORY = FabricLoader.getInstance().getGameDir().resolve("shaderpacks");
 
 	private static ShaderPack currentPack;
 	private static String currentPackName;
@@ -51,8 +50,20 @@ public class Iris implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
+		FabricLoader.getInstance().getModContainer("sodium").ifPresent(
+			modContainer -> {
+				String versionString = modContainer.getMetadata().getVersion().getFriendlyString();
+
+				// A lot of people are reporting visual bugs with Iris + Sodium. This makes it so that if we don't have
+				// the right fork of Sodium, it will just crash.
+				if (!versionString.startsWith("IRIS-SNAPSHOT")) {
+					throw new IllegalStateException("You do not have a compatible version of Sodium installed! You have " + versionString + " but IRIS-SNAPSHOT is expected");
+				}
+			}
+		);
+
 		try {
-			Files.createDirectories(shaderpacksDirectory);
+			Files.createDirectories(SHADERPACKS_DIRECTORY);
 		} catch (IOException e) {
 			Iris.logger.warn("Failed to create shaderpacks directory!");
 			Iris.logger.catching(Level.WARN, e);
@@ -77,8 +88,6 @@ public class Iris implements ClientModInitializer {
 
 				try {
 					reload();
-					// TODO: Is this needed?
-					// minecraftClient.worldRenderer.reload();
 
 					if (minecraftClient.player != null){
 						minecraftClient.player.sendMessage(new TranslatableText("iris.shaders.reloaded"), false);
@@ -98,6 +107,16 @@ public class Iris implements ClientModInitializer {
 	}
 
 	public static void loadShaderpack() {
+		if (!irisConfig.areShadersEnabled()) {
+			logger.info("Shaders are disabled because enableShaders is set to false in iris.properties");
+
+			currentPack = null;
+			currentPackName = "(off)";
+			internal = false;
+
+			return;
+		}
+
 		// Attempt to load an external shaderpack if it is available
 		if (!irisConfig.isInternal()) {
 			if (!loadExternalShaderpack(irisConfig.getShaderPackName())) {
@@ -111,7 +130,7 @@ public class Iris implements ClientModInitializer {
 	}
 
 	private static boolean loadExternalShaderpack(String name) {
-		Path shaderPackRoot = shaderpacksDirectory.resolve(name);
+		Path shaderPackRoot = SHADERPACKS_DIRECTORY.resolve(name);
 		Path shaderPackPath;
 
 		if (shaderPackRoot.toString().endsWith(".zip")) {
@@ -209,6 +228,32 @@ public class Iris implements ClientModInitializer {
 		internal = true;
 	}
 
+	public static boolean isValidShaderpack(Path pack) {
+		if (Files.isDirectory(pack)) {
+			try {
+				return Files.walk(pack)
+						.filter(Files::isDirectory)
+						.anyMatch(path -> path.endsWith("shaders"));
+			} catch (IOException ignored) {
+				// ignored, not a valid shader pack.
+			}
+		}
+
+		if (pack.toString().endsWith(".zip")) {
+			try {
+				FileSystem zipSystem = FileSystems.newFileSystem(pack, Iris.class.getClassLoader());
+				Path root = zipSystem.getRootDirectories().iterator().next();
+				return Files.walk(root)
+						.filter(Files::isDirectory)
+						.anyMatch(path -> path.endsWith("shaders"));
+			} catch (IOException ignored) {
+				// ignored, not a valid shader pack.
+			}
+		}
+
+		return false;
+	}
+
 	public static void reload() throws IOException {
 		// allows shaderpacks to be changed at runtime
 		irisConfig.initialize();
@@ -266,24 +311,26 @@ public class Iris implements ClientModInitializer {
 	}
 
 	private static WorldRenderingPipeline createPipeline(DimensionId dimensionId) {
-		ProgramSet programs = Objects.requireNonNull(currentPack).getProgramSet(dimensionId);
+		if (currentPack == null) {
+			// completely disable shader-based rendering
+			return new FixedFunctionWorldRenderingPipeline();
+		}
+
+		ProgramSet programs = currentPack.getProgramSet(dimensionId);
 
 		if (internal) {
 			return new InternalWorldRenderingPipeline(programs);
 		} else {
 			return new DeferredWorldRenderingPipeline(programs);
 		}
-
-		// note: uncommenting this line and commenting the above lines will completely disable shader-based rendering
-		// return new FixedFunctionWorldRenderingPipeline();
 	}
 
 	public static PipelineManager getPipelineManager() {
 		return pipelineManager;
 	}
 
-	public static ShaderPack getCurrentPack() {
-		return currentPack;
+	public static Optional<ShaderPack> getCurrentPack() {
+		return Optional.ofNullable(currentPack);
 	}
 
 	public static String getCurrentPackName() {
